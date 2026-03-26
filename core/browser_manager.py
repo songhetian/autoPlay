@@ -34,6 +34,7 @@ class BrowserManager:
                 self.context = self.browser.new_context()
                 self.page = self.context.new_page()
         self.page.goto(url)
+        self.page.wait_for_load_state("domcontentloaded")
         return self.page
 
     def _configure_browser_runtime_path(self):

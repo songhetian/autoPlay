@@ -253,6 +253,8 @@ class RPAMainWindow(QMainWindow):
         self.elements = []
         self.images = []
         self.current_step_index = -1
+        self.order_statuses = {}
+        self.order_index_map = {}
         self.browser_manager = None
         self.capture_thread = None
         self.capture_default_url = "https://example.com"
@@ -522,6 +524,11 @@ class RPAMainWindow(QMainWindow):
         stats_row.addWidget(self.failed_stat_label)
         stats_row.addStretch()
         run_layout.addLayout(stats_row)
+        self.order_table = QTableWidget(0, 3)
+        self.order_table.setHorizontalHeaderLabels(["订单号", "状态", "详情"])
+        self.order_table.horizontalHeader().setStretchLastSection(True)
+        self.order_table.verticalHeader().setVisible(False)
+        run_layout.addWidget(self.order_table)
         run_btn_row = QHBoxLayout()
         self.parse_only_btn = QPushButton("仅解析并导出 Excel")
         self.parse_only_btn.clicked.connect(self.run_parsing_only)
@@ -655,6 +662,26 @@ class RPAMainWindow(QMainWindow):
         self.total_stat_label.setText(f"总数 {total}")
         self.success_stat_label.setText(f"成功 {success}")
         self.failed_stat_label.setText(f"失败 {failed}")
+
+    def refresh_order_table(self):
+        self.order_statuses.clear()
+        self.order_index_map.clear()
+        self.order_table.setRowCount(len(self.invoice_rows))
+        for idx, row in enumerate(self.invoice_rows):
+            order_no = row["order_no"]
+            self.order_index_map[order_no] = idx
+            status_item = QTableWidgetItem("待执行")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            self.order_table.setItem(idx, 0, QTableWidgetItem(order_no))
+            self.order_table.setItem(idx, 1, status_item)
+            self.order_table.setItem(idx, 2, QTableWidgetItem("尚未执行"))
+
+    def update_order_table_row(self, order_no, status, detail):
+        idx = self.order_index_map.get(order_no)
+        if idx is None:
+            return
+        self.order_table.item(idx, 1).setText(status)
+        self.order_table.item(idx, 2).setText(detail)
 
     def build_scheme_payload(self, name):
         return {
@@ -867,6 +894,7 @@ class RPAMainWindow(QMainWindow):
         self.summary_label.setText(
             f"共解析 {len(self.invoice_rows)} 个订单，异常文件 {len(failed_files)} 个"
         )
+        self.refresh_order_table()
         self.log(
             f"解析完成：{len(self.invoice_rows)} 个订单，{len(failed_files)} 个文件未匹配命名规则",
             "#34d399",
@@ -1714,7 +1742,9 @@ class RPAMainWindow(QMainWindow):
                     except Exception as exc:
                         last_error = str(exc)
                         self.log(f"订单执行失败：{row['order_no']}，第 {attempt} 次，原因：{exc}", "#ef4444")
-                if not order_success:
+                if order_success:
+                    self.update_order_table_row(row["order_no"], "成功", f"第 {attempt} 次执行成功")
+                else:
                     failed += 1
                     InvoiceParser.update_excel_status(
                         self.latest_excel_path,
@@ -1722,6 +1752,7 @@ class RPAMainWindow(QMainWindow):
                         "失败",
                         last_error,
                     )
+                    self.update_order_table_row(row["order_no"], "失败", last_error)
                 self.update_run_stats(total=total, success=success, failed=failed)
             self.show_completion_message(
                 "执行完成",

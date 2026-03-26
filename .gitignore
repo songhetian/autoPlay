@@ -1,2 +1,3 @@
 build/
-data/browser_profiles/
+#data/browser_profiles/
+dist/

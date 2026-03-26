@@ -113,16 +113,12 @@ class BrowserManager:
             }
           }, true);
 
-          document.addEventListener('click', (event) => {
-            if (!window.__rpaPickerInstalled) return;
-            if (event.shiftKey) {
-              return;
-            }
-            event.preventDefault();
-            event.stopPropagation();
-            const el = event.target;
-            if (!(el instanceof Element)) return;
-            window.py_element_picked({
+          let pickLocked = false;
+
+          function submitPick(el) {
+            if (pickLocked || !(el instanceof Element)) return;
+            pickLocked = true;
+            Promise.resolve(window.py_element_picked({
               tag: el.tagName.toLowerCase(),
               text: bestText(el),
               css: buildCss(el),
@@ -131,7 +127,30 @@ class BrowserManager:
               inputType: el.getAttribute('type') || '',
               accept: el.getAttribute('accept') || '',
               isFileInput: el.matches('input[type="file"]'),
+            })).catch(() => {
+              pickLocked = false;
             });
+          }
+
+          document.addEventListener('mousedown', (event) => {
+            if (!window.__rpaPickerInstalled) return;
+            if (event.button !== 0) return;
+            if (event.shiftKey) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            const el = event.target;
+            submitPick(el);
+          }, true);
+
+          document.addEventListener('click', (event) => {
+            if (!window.__rpaPickerInstalled) return;
+            if (event.shiftKey) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
           }, true);
         })();
         """
@@ -216,6 +235,13 @@ class BrowserManager:
 
         self.page.add_init_script(self._picker_script)
         self.page.evaluate(self._picker_script)
+        for frame in self.page.frames:
+            if frame == self.page.main_frame:
+                continue
+            try:
+                frame.evaluate(self._picker_script)
+            except Exception:
+                pass
 
     def disable_picker(self):
         if not self.page:

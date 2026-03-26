@@ -1650,15 +1650,24 @@ class RPAMainWindow(QMainWindow):
         return default_name, default_role, role_options
 
     def capture_element_with_defaults(self, default_name="", default_role="其他"):
-        page_url, ok = QInputDialog.getText(
-            self,
-            "打开采集页面",
-            "页面地址",
-            text=self.capture_default_url,
-        )
-        if not ok or not page_url.strip():
-            return
-        self.capture_default_url = page_url.strip()
+        default_page_url = self.capture_default_url
+        workflow_url = (self.get_browser_start_url() or "").strip()
+        if workflow_url and (not default_page_url or default_page_url == "https://example.com"):
+            default_page_url = workflow_url
+
+        resolved_page_url = default_page_url.strip()
+        if not resolved_page_url or resolved_page_url == "https://example.com":
+            page_url, ok = QInputDialog.getText(
+                self,
+                "打开采集页面",
+                "页面地址",
+                text=default_page_url,
+            )
+            if not ok or not page_url.strip():
+                return
+            resolved_page_url = page_url.strip()
+
+        self.capture_default_url = resolved_page_url
 
         suggested_name, suggested_role, role_options = self.suggest_capture_defaults()
         merged_name = default_name or suggested_name
@@ -1685,7 +1694,7 @@ class RPAMainWindow(QMainWindow):
         self.capture_context = {
             "name": name.strip(),
             "role": role,
-            "url": self.capture_default_url,
+            "url": resolved_page_url,
             "scheme_name": self.current_scheme_name,
         }
         self.capture_thread = threading.Thread(
@@ -1805,7 +1814,7 @@ class RPAMainWindow(QMainWindow):
                 user_data_dir=self.get_scheme_profile_dir(capture_context["scheme_name"]),
             )
             manager.enable_picker()
-            self.browser_status_signal.emit("浏览器已进入采集模式：普通点击采集元素，按住 Shift 再点击可正常打开链接或切换页面。")
+            self.browser_status_signal.emit("浏览器已进入采集模式：普通点击采集元素，按住 Shift 再点击可正常打开链接或切换页面；如果页面在 iframe 里，现在也会一起采集。")
             result = manager.wait_for_pick(timeout=300)
             if not result:
                 self.browser_status_signal.emit("元素采集超时或未成功。")

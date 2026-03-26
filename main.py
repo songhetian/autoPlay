@@ -56,7 +56,7 @@ STEP_TEMPLATES = [
     {"type": "input_file_name", "title": "输入文件名", "category": "变量输入", "description": "自动写入解析出的文件名", "config": {"target": "", "binding": "{{current.file_name}}"}},
     {"type": "input_file_path", "title": "输入文件路径", "category": "变量输入", "description": "自动写入解析出的完整文件路径", "config": {"target": "", "binding": "{{current.file_path}}"}},
     {"type": "input_fixed_text", "title": "输入固定内容", "category": "变量输入", "description": "输入手工填写的固定文本", "config": {"target": "", "text": ""}},
-    {"type": "upload_file", "title": "Windows上传框选文件", "category": "文件操作", "description": "向弹出的Windows文件选择框填入当前发票路径", "config": {"binding": "{{current.file_path}}"}},
+    {"type": "upload_file", "title": "上传文件", "category": "文件操作", "description": "优先向网页上传控件写入当前发票路径，找不到时再回退到 Windows 文件框", "config": {"target": "", "binding": "{{current.file_path}}"}},
     {"type": "delete_current_file", "title": "删除当前文件", "category": "文件操作", "description": "上传成功后删除当前发票文件", "config": {}},
     {"type": "wait", "title": "固定等待", "category": "流程控制", "description": "固定等待若干秒", "config": {"seconds": 2}},
     {"type": "press_enter", "title": "按回车", "category": "流程控制", "description": "向当前焦点发送 Enter", "config": {}},
@@ -441,6 +441,10 @@ class RPAMainWindow(QMainWindow):
         hint = QLabel("参考影刀式线性节点流：拖动排序，点击节点在右侧编辑参数。")
         hint.setStyleSheet("color:#64748b;")
         canvas_layout.addWidget(hint)
+        self.workflow_status_label = QLabel("流程统计：共 0 个节点，已配置 0 个，待配置 0 个，前台节点 0 个")
+        self.workflow_status_label.setWordWrap(True)
+        self.workflow_status_label.setStyleSheet("color:#475569;background:#f8fafc;padding:8px 10px;border-radius:8px;")
+        canvas_layout.addWidget(self.workflow_status_label)
 
         canvas_btn_row = QHBoxLayout()
         clear_flow_btn = QPushButton("清空流程")
@@ -451,10 +455,16 @@ class RPAMainWindow(QMainWindow):
         move_up_btn.clicked.connect(lambda: self.move_step(-1))
         move_down_btn = QPushButton("下移")
         move_down_btn.clicked.connect(lambda: self.move_step(1))
+        inspect_flow_btn = QPushButton("流程体检")
+        inspect_flow_btn.clicked.connect(self.inspect_workflow)
+        verify_upload_btn = QPushButton("批量验证上传")
+        verify_upload_btn.clicked.connect(self.verify_all_upload_steps)
         canvas_btn_row.addWidget(clear_flow_btn)
         canvas_btn_row.addWidget(remove_step_btn)
         canvas_btn_row.addWidget(move_up_btn)
         canvas_btn_row.addWidget(move_down_btn)
+        canvas_btn_row.addWidget(inspect_flow_btn)
+        canvas_btn_row.addWidget(verify_upload_btn)
         test_step_btn = QPushButton("测试当前节点")
         test_step_btn.clicked.connect(self.test_current_step)
         canvas_btn_row.addWidget(test_step_btn)
@@ -925,8 +935,9 @@ class RPAMainWindow(QMainWindow):
             locator_value = element.get("locator_value", "未填写")
             role = element.get("element_role", "未分类")
             status = element.get("status", "未记录")
+            upload_badge = " · 可后台上传" if self.is_upload_compatible_element(element) else ""
             item = QListWidgetItem(
-                f"{element['name']} [{role}/{status}]\n{locator_type}: {locator_value}\n来源：{area}"
+                f"{element['name']} [{role}/{status}{upload_badge}]\n{locator_type}: {locator_value}\n来源：{area}"
             )
             item.setData(Qt.UserRole, element["name"])
             self.element_library.addItem(item)
@@ -1009,17 +1020,164 @@ class RPAMainWindow(QMainWindow):
         self.refresh_workflow_view(select_index=len(self.workflow_steps) - 1)
         self.log("已加入常用流程模板，可在右侧继续细化参数。", "#34d399")
 
+    def step_uses_foreground_io(self, step):
+        step_type = step.get("type")
+        if step_type == "click_image":
+            return True
+        if step_type == "upload_file":
+            target_name = step.get("config", {}).get("target", "").strip()
+            if not target_name:
+                return True
+            element = self.resolve_element_record(target_name)
+            return not self.is_upload_compatible_element(element)
+        return False
+
+    def build_step_mode_hint(self, step):
+        return "占前台" if self.step_uses_foreground_io(step) else "后台优先"
+
+    def is_upload_step_verified(self, step):
+        return bool(step.get("type") == "upload_file" and step.get("config", {}).get("upload_verified"))
+
+    def get_upload_step_status_text(self, step):
+        if step.get("type") != "upload_file":
+            return ""
+        config = step.get("config", {})
+        if config.get("upload_verified"):
+            target_name = config.get("target") or "自动查找 input[type=file]"
+            return f"已验证后台上传 · {target_name}"
+        return "未验证后台上传"
+
+    def get_step_config_issue(self, step):
+        step_type = step.get("type")
+        config = step.get("config", {})
+        if step_type == "open_browser" and not (config.get("url") or "").strip():
+            return "未设置页面地址"
+        if step_type in {
+            "click_element",
+            "double_click_element",
+            "focus_element",
+            "wait_element",
+            "input_order_no",
+            "input_file_name",
+            "input_file_path",
+            "input_fixed_text",
+        } and not (config.get("target") or "").strip():
+            return "未绑定目标元素"
+        if step_type in {"click_image", "wait_image"} and not (config.get("target") or "").strip():
+            return "未绑定目标图片"
+        if step_type == "input_fixed_text" and not (config.get("text") or "").strip():
+            return "未填写固定内容"
+        if step_type == "upload_file" and not (config.get("target") or "").strip():
+            return "未绑定上传控件，将依赖自动查找或系统文件框"
+        return ""
+
+    def get_step_fix_hint(self, step):
+        step_type = step.get("type")
+        config = step.get("config", {})
+        issue = self.get_step_config_issue(step)
+        if not issue:
+            return ""
+        if step_type == "open_browser":
+            return "建议先填写上传页面地址，后续测试节点和正式执行都会复用这里的地址。"
+        if step_type in {"click_element", "double_click_element", "focus_element", "wait_element"}:
+            return "建议先选中当前节点，再到左侧元素库点击对应元素；如果还没采集元素，可先用“智能获取元素”。"
+        if step_type in {"input_order_no", "input_file_name", "input_file_path", "input_fixed_text"} and not (config.get("target") or "").strip():
+            return "建议先绑定目标输入框；如果页面里还没有这个元素，先去采集输入框再回来绑定。"
+        if step_type == "input_fixed_text" and not (config.get("text") or "").strip():
+            return "建议在右侧“输入内容”里填写固定文本，再测试当前节点。"
+        if step_type in {"click_image", "wait_image"}:
+            return "建议先到左侧图片库导入或选择目标图片，再回到当前节点绑定。"
+        if step_type == "upload_file":
+            return "建议优先采集网页里的文件上传控件并绑定到当前节点；标准 input[type=file] 可以走后台上传。"
+        return "建议先补齐当前节点的必填配置，再继续测试或执行。"
+
+    def get_step_quick_action(self, step):
+        step_type = step.get("type")
+        config = step.get("config", {})
+        issue = self.get_step_config_issue(step)
+        if not issue:
+            return None, None
+        if step_type in {"click_element", "double_click_element", "wait_element"} and not (config.get("target") or "").strip():
+            return ("采集目标元素", lambda: self.capture_element_with_defaults("目标元素", "按钮"))
+        if step_type in {"focus_element", "input_order_no", "input_file_name", "input_file_path", "input_fixed_text"} and not (config.get("target") or "").strip():
+            return ("采集输入框", lambda: self.capture_element_with_defaults("输入框", "输入框"))
+        if step_type == "upload_file" and not (config.get("target") or "").strip():
+            return ("采集上传控件", lambda: self.capture_element_with_defaults("文件上传控件", "上传控件"))
+        if step_type in {"click_image", "wait_image"} and not (config.get("target") or "").strip():
+            return ("导入图片", self.import_image)
+        return None, None
+
+    def is_upload_compatible_element(self, element):
+        if not element:
+            return False
+        if element.get("is_file_input"):
+            return True
+        tag = (element.get("tag") or "").strip().lower()
+        input_type = (element.get("input_type") or "").strip().lower()
+        locator_value = (element.get("locator_value") or "").strip().lower()
+        css_selector = (element.get("css_selector") or "").strip().lower()
+        xpath = (element.get("xpath") or "").strip().lower()
+        if tag == "input" and input_type == "file":
+            return True
+        signals = [locator_value, css_selector, xpath]
+        return any("type='file'" in value or 'type="file"' in value or "input[type='file']" in value or 'input[type="file"]' in value for value in signals)
+
+    def suggest_captured_element_name(self, original_name, is_file_input):
+        name = (original_name or "").strip()
+        if not is_file_input:
+            return name
+        if not name:
+            return "文件上传控件"
+        if "上传" in name and "控件" not in name:
+            return f"{name}控件"
+        if "文件" in name and "控件" not in name:
+            return f"{name}控件"
+        return name
+
+    def suggest_captured_element_role(self, original_role, is_file_input):
+        if is_file_input:
+            return "上传控件"
+        return original_role
+
     def refresh_workflow_view(self, select_index=None):
         current_index = self.workflow_list.currentRow() if select_index is None else select_index
         self.workflow_list.clear()
+        pending_count = 0
+        foreground_count = 0
         for index, step in enumerate(self.workflow_steps, start=1):
             summary = self.build_step_summary(step)
+            mode_hint = self.build_step_mode_hint(step)
+            config_issue = self.get_step_config_issue(step)
+            if config_issue:
+                pending_count += 1
+            if self.step_uses_foreground_io(step):
+                foreground_count += 1
+            step_label = f"{step['title']} [{mode_hint}]"
+            if config_issue:
+                step_label += " [待配置]"
+            elif self.is_upload_step_verified(step):
+                step_label += " [已验证]"
             item = QListWidgetItem(
-                f"{index:02d}  {step['title']}\n{step['category']} · {summary}"
+                f"{index:02d}  {step_label}\n{step['category']} · {summary}"
             )
             item.setData(Qt.UserRole, step)
-            item.setBackground(QColor("#f8fbff"))
+            if config_issue:
+                item.setBackground(QColor("#fef2f2"))
+            elif self.step_uses_foreground_io(step):
+                item.setBackground(QColor("#fff7ed"))
+            else:
+                item.setBackground(QColor("#f8fbff"))
             self.workflow_list.addItem(item)
+        total_steps = len(self.workflow_steps)
+        configured_count = max(0, total_steps - pending_count)
+        self.workflow_status_label.setText(
+            f"流程统计：共 {total_steps} 个节点，已配置 {configured_count} 个，待配置 {pending_count} 个，前台节点 {foreground_count} 个"
+        )
+        self.workflow_status_label.setStyleSheet(
+            "color:#991b1b;background:#fef2f2;padding:8px 10px;border-radius:8px;"
+            if pending_count
+            else "color:#475569;background:#f8fafc;padding:8px 10px;border-radius:8px;"
+        )
         if self.workflow_steps:
             target_index = max(0, min(current_index, len(self.workflow_steps) - 1))
             self.workflow_list.setCurrentRow(target_index)
@@ -1052,7 +1210,14 @@ class RPAMainWindow(QMainWindow):
         if step_type == "wait_image":
             return f"图片：{config.get('target') or '未绑定'}，超时：{config.get('timeout', 10)} 秒"
         if step_type == "upload_file":
-            return f"变量：{config.get('binding', '{{current.file_path}}')}"
+            target = config.get("target") or "自动查找 input[type=file]"
+            if not config.get("target"):
+                status = self.get_upload_step_status_text(step)
+                return f"上传控件：{target} · {status}"
+            element = self.resolve_element_record(config.get("target", ""))
+            status = "可后台上传" if self.is_upload_compatible_element(element) else "可能回退系统文件框"
+            verify_status = self.get_upload_step_status_text(step)
+            return f"上传控件：{target} · {status} · {verify_status}"
         if step_type == "input_fixed_text":
             return f"元素：{config.get('target') or '未绑定'}，内容：{config.get('text') or '未填写'}"
         if step_type == "screenshot":
@@ -1067,6 +1232,38 @@ class RPAMainWindow(QMainWindow):
         self.workflow_steps.clear()
         self.refresh_workflow_view()
         self.log("已清空流程画布", "#f59e0b")
+
+    def find_first_problem_step_index(self):
+        for index, step in enumerate(self.workflow_steps):
+            if self.get_step_config_issue(step):
+                return index
+        return -1
+
+    def inspect_workflow(self):
+        if not self.workflow_steps:
+            QMessageBox.information(self, "暂无流程", "请先从左侧节点库搭建流程。")
+            return
+        config_issues, foreground_steps, unverified_upload_steps = self.build_execution_readiness_report()
+        first_problem_index = self.find_first_problem_step_index()
+        if first_problem_index >= 0:
+            self.refresh_workflow_view(select_index=first_problem_index)
+            message = "已定位到第一个待配置节点。\n\n" + "\n".join(config_issues[:8])
+            if len(config_issues) > 8:
+                message += f"\n\n另有 {len(config_issues) - 8} 个节点待配置。"
+            QMessageBox.warning(self, "流程体检结果", message)
+            self.log(f"流程体检发现 {len(config_issues)} 个待配置节点，已定位到第一个问题节点。", "#ef4444")
+            return
+        summary = "流程体检通过：当前没有待配置节点。"
+        if unverified_upload_steps:
+            summary += "\n\n以下上传节点尚未做后台上传验证：\n" + "\n".join(unverified_upload_steps[:8])
+            if len(unverified_upload_steps) > 8:
+                summary += f"\n另有 {len(unverified_upload_steps) - 8} 个未验证上传节点。"
+        if foreground_steps:
+            summary += "\n\n以下节点执行时仍会占用前台鼠标/键盘：\n" + "\n".join(foreground_steps[:8])
+            if len(foreground_steps) > 8:
+                summary += f"\n另有 {len(foreground_steps) - 8} 个前台节点。"
+        QMessageBox.information(self, "流程体检结果", summary)
+        self.log("流程体检通过：未发现待配置节点。", "#34d399")
 
     def remove_step(self):
         index = self.workflow_list.currentRow()
@@ -1114,6 +1311,40 @@ class RPAMainWindow(QMainWindow):
         desc.setStyleSheet("color:#64748b;")
         self.property_layout.addWidget(title)
         self.property_layout.addWidget(desc)
+
+        mode_hint = QLabel(
+            "执行方式：该节点会占用前台鼠标/键盘"
+            if self.step_uses_foreground_io(step)
+            else "执行方式：该节点优先走后台浏览器控制"
+        )
+        mode_hint.setWordWrap(True)
+        mode_hint.setStyleSheet(
+            "color:#9a3412;background:#fff7ed;padding:10px;border-radius:10px;"
+            if self.step_uses_foreground_io(step)
+            else "color:#166534;background:#f0fdf4;padding:10px;border-radius:10px;"
+        )
+        self.property_layout.addWidget(mode_hint)
+
+        config_issue = self.get_step_config_issue(step)
+        if config_issue:
+            issue_hint = QLabel(f"配置提醒：{config_issue}")
+            issue_hint.setWordWrap(True)
+            issue_hint.setStyleSheet("color:#991b1b;background:#fef2f2;padding:10px;border-radius:10px;")
+            self.property_layout.addWidget(issue_hint)
+            fix_hint = self.get_step_fix_hint(step)
+            if fix_hint:
+                action_hint = QLabel(f"修复建议：{fix_hint}")
+                action_hint.setWordWrap(True)
+                action_hint.setStyleSheet("color:#92400e;background:#fffbeb;padding:10px;border-radius:10px;")
+                self.property_layout.addWidget(action_hint)
+            action_label, action_handler = self.get_step_quick_action(step)
+            if action_label and action_handler:
+                quick_action_btn = QPushButton(action_label)
+                quick_action_btn.clicked.connect(action_handler)
+                quick_action_btn.setStyleSheet(
+                    "background:#2563eb;color:white;font-weight:700;padding:8px 12px;border-radius:8px;"
+                )
+                self.property_layout.addWidget(quick_action_btn)
 
         form = QWidget()
         form_layout = QFormLayout(form)
@@ -1193,6 +1424,44 @@ class RPAMainWindow(QMainWindow):
             binding.setStyleSheet("background:#f8fafc;color:#475569;")
             form_layout.addRow("变量绑定", binding)
 
+        if step_type == "upload_file":
+            target_edit = QLineEdit(config.get("target", ""))
+            target_edit.setPlaceholderText("可绑定网页上传控件；留空时自动查找 input[type=file]")
+            target_edit.textChanged.connect(lambda value: self.update_step_config("target", value))
+            form_layout.addRow("上传控件", target_edit)
+            target_name = config.get("target", "").strip()
+            target_element = self.resolve_element_record(target_name) if target_name else None
+            upload_tip = QLabel(
+                "当前绑定元素可直接走网页上传，不需要占用系统文件框。"
+                if self.is_upload_compatible_element(target_element)
+                else "当前未绑定明确的网页上传控件，执行时可能回退到 Windows 文件框。"
+            )
+            upload_tip.setWordWrap(True)
+            upload_tip.setStyleSheet(
+                "color:#166534;background:#f0fdf4;padding:8px;border-radius:8px;"
+                if self.is_upload_compatible_element(target_element)
+                else "color:#9a3412;background:#fff7ed;padding:8px;border-radius:8px;"
+            )
+            form_layout.addRow("上传判断", upload_tip)
+            verify_label = QLabel(
+                "当前上传控件已通过后台上传测试。"
+                if self.is_upload_step_verified(step)
+                else "当前上传控件尚未做后台上传验证。"
+            )
+            verify_label.setWordWrap(True)
+            verify_label.setStyleSheet(
+                "color:#166534;background:#f0fdf4;padding:8px;border-radius:8px;"
+                if self.is_upload_step_verified(step)
+                else "color:#475569;background:#f8fafc;padding:8px;border-radius:8px;"
+            )
+            form_layout.addRow("验证状态", verify_label)
+            test_upload_btn = QPushButton("测试上传控件")
+            test_upload_btn.clicked.connect(self.test_upload_binding_current_step)
+            test_upload_btn.setStyleSheet(
+                "background:#0f766e;color:white;font-weight:700;padding:8px 12px;border-radius:8px;"
+            )
+            form_layout.addRow("专项测试", test_upload_btn)
+
         if step_type == "input_fixed_text":
             text_edit = QLineEdit(config.get("text", ""))
             text_edit.setPlaceholderText("例如：电子发票 / 已核验 / 默认备注")
@@ -1232,7 +1501,10 @@ class RPAMainWindow(QMainWindow):
     def update_step_config(self, key, value):
         if self.current_step_index < 0:
             return
-        self.workflow_steps[self.current_step_index]["config"][key] = value
+        step = self.workflow_steps[self.current_step_index]
+        step["config"][key] = value
+        if step.get("type") == "upload_file" and key == "target":
+            step["config"]["upload_verified"] = False
         self.refresh_workflow_view(select_index=self.current_step_index)
         self.update_preview()
 
@@ -1265,7 +1537,12 @@ class RPAMainWindow(QMainWindow):
             lines.append(f"写入元素：{config.get('target') or '未绑定'}")
             lines.append(f"实际值：{config.get('text') or '未填写'}")
         elif step["type"] == "upload_file":
-            lines.append(f"向系统文件框填入：{sample_row['file_path']}")
+            lines.append(f"优先写入上传控件：{config.get('target') or '自动查找 input[type=file]'}")
+            lines.append(f"文件路径：{sample_row['file_path']}")
+            if config.get("target"):
+                element = self.resolve_element_record(config.get("target", ""))
+                lines.append("控件判断：可后台上传" if self.is_upload_compatible_element(element) else "控件判断：可能回退系统文件框")
+            lines.append(f"验证状态：{self.get_upload_step_status_text(step)}")
         elif step["type"] in {"click_element", "double_click_element", "focus_element"}:
             lines.append(f"定位元素：{config.get('target') or '未绑定'}")
         elif step["type"] == "wait_element":
@@ -1295,6 +1572,10 @@ class RPAMainWindow(QMainWindow):
             lines.append(f"输出日志：{config.get('message', '')}")
         else:
             lines.append("无额外参数")
+        config_issue = self.get_step_config_issue(step)
+        if config_issue:
+            lines.append(f"配置提醒：{config_issue}")
+        lines.append(f"执行方式：{self.build_step_mode_hint(step)}")
         return "\n".join(lines)
 
     def add_element(self):
@@ -1310,7 +1591,45 @@ class RPAMainWindow(QMainWindow):
         self.refresh_element_library()
         self.log(f"元素库新增：{element['name']}", "#34d399")
 
-    def capture_element(self):
+    def suggest_capture_defaults(self):
+        role_options = ["输入框", "按钮", "上传控件", "上传入口", "查询入口", "确认按钮", "页面标签", "弹窗", "其他"]
+        default_name = ""
+        default_role = "其他"
+        if self.current_step_index < 0 or self.current_step_index >= len(self.workflow_steps):
+            return default_name, default_role, role_options
+
+        step = self.workflow_steps[self.current_step_index]
+        step_type = step.get("type")
+        step_title = (step.get("title") or "").strip()
+        if step_type in {"input_order_no", "input_file_name", "input_file_path", "input_fixed_text", "focus_element"}:
+            default_role = "输入框"
+            default_name = step_title or "输入框"
+        elif step_type in {"click_element", "double_click_element"}:
+            default_role = "按钮"
+            default_name = step_title or "按钮"
+        elif step_type == "wait_element":
+            default_role = "页面标签"
+            default_name = step_title or "页面元素"
+        elif step_type == "upload_file":
+            default_role = "上传控件"
+            default_name = "文件上传控件"
+        elif step_type == "press_enter":
+            default_role = "确认按钮"
+            default_name = "确认按钮"
+
+        type_based_names = {
+            "input_order_no": "订单号输入框",
+            "input_file_name": "文件名输入框",
+            "input_file_path": "文件路径输入框",
+            "click_element": "按钮",
+            "double_click_element": "按钮",
+            "wait_element": "页面元素",
+            "upload_file": "文件上传控件",
+        }
+        default_name = type_based_names.get(step_type, default_name) or default_name
+        return default_name, default_role, role_options
+
+    def capture_element_with_defaults(self, default_name="", default_role="其他"):
         page_url, ok = QInputDialog.getText(
             self,
             "打开采集页面",
@@ -1321,7 +1640,10 @@ class RPAMainWindow(QMainWindow):
             return
         self.capture_default_url = page_url.strip()
 
-        name, ok = QInputDialog.getText(self, "元素名称", "给这个元素起个名字")
+        suggested_name, suggested_role, role_options = self.suggest_capture_defaults()
+        merged_name = default_name or suggested_name
+        merged_role = default_role if default_role in role_options else suggested_role
+        name, ok = QInputDialog.getText(self, "元素名称", "给这个元素起个名字", text=merged_name)
         if not ok or not name.strip():
             return
 
@@ -1329,8 +1651,8 @@ class RPAMainWindow(QMainWindow):
             self,
             "元素用途",
             "选择元素用途",
-            ["输入框", "按钮", "上传入口", "查询入口", "确认按钮", "页面标签", "弹窗", "其他"],
-            0,
+            role_options,
+            role_options.index(merged_role) if merged_role in role_options else 0,
             False,
         )
         if not ok:
@@ -1352,6 +1674,9 @@ class RPAMainWindow(QMainWindow):
             daemon=True,
         )
         self.capture_thread.start()
+
+    def capture_element(self):
+        self.capture_element_with_defaults()
 
     def open_login_browser(self):
         page_url, ok = QInputDialog.getText(
@@ -1480,6 +1805,11 @@ class RPAMainWindow(QMainWindow):
         css_selector = payload.get("css", "").strip()
         xpath = payload.get("xpath", "").strip()
         text_hint = payload.get("text", "").strip()
+        tag = payload.get("tag", "").strip().lower()
+        input_type = payload.get("inputType", "").strip().lower()
+        is_file_input = bool(payload.get("isFileInput"))
+        suggested_name = self.suggest_captured_element_name(payload.get("name", ""), is_file_input)
+        suggested_role = self.suggest_captured_element_role(payload.get("role", ""), is_file_input)
 
         if not css_selector and not xpath:
             self.log("采集到了元素，但没有生成可用定位表达式。", "#ef4444")
@@ -1504,21 +1834,26 @@ class RPAMainWindow(QMainWindow):
             locator_value = xpath
 
         element = {
-            "name": payload["name"],
-            "element_role": payload["role"],
+            "name": suggested_name,
+            "element_role": suggested_role,
             "locator_type": locator_type,
             "locator_value": locator_value,
             "area": payload["url"],
-            "note": f"标签: {payload.get('tag', '')}；文本: {text_hint}" if text_hint else f"标签: {payload.get('tag', '')}",
+            "note": f"标签: {payload.get('tag', '')}；类型: {payload.get('inputType', '') or '无'}；文本: {text_hint}" if text_hint else f"标签: {payload.get('tag', '')}；类型: {payload.get('inputType', '') or '无'}",
             "status": "已采集",
             "css_selector": css_selector,
             "xpath": xpath,
+            "tag": tag,
+            "input_type": input_type,
+            "is_file_input": is_file_input,
+            "accept": payload.get("accept", "").strip(),
         }
 
         self.elements = [item for item in self.elements if item["name"] != element["name"]]
         self.elements.append(element)
         self.save_json(self.get_scheme_element_store_path(self.current_scheme_name), self.elements)
         self.refresh_element_library()
+        auto_bound_step = None
         if self.current_step_index >= 0 and self.workflow_steps[self.current_step_index]["type"] in {
             "click_element",
             "double_click_element",
@@ -1528,16 +1863,29 @@ class RPAMainWindow(QMainWindow):
             "input_file_name",
             "input_file_path",
             "input_fixed_text",
+            "upload_file",
         }:
             self.workflow_steps[self.current_step_index]["config"]["target"] = element["name"]
+            auto_bound_step = self.workflow_steps[self.current_step_index]["title"]
             self.refresh_workflow_view(select_index=self.current_step_index)
         self.log(
             f"已采集元素：{element['name']}，优先保存为 {locator_type}，CSS 和 XPath 都已记录。",
             "#34d399",
         )
+        if auto_bound_step:
+            self.log(f"元素“{element['name']}”已自动绑定到当前节点：{auto_bound_step}。", "#60a5fa")
+        if is_file_input:
+            if payload.get("name", "").strip() != suggested_name:
+                self.log(f"已将上传控件名称优化为“{suggested_name}”，便于后续绑定。", "#22c55e")
+            self.log(f"元素“{element['name']}”识别为网页上传控件，可直接绑定到“上传文件”节点。", "#22c55e")
+            if auto_bound_step and self.workflow_steps[self.current_step_index]["type"] == "upload_file":
+                self.log(f"当前上传文件节点已完成绑定，后续可直接测试后台上传。", "#22c55e")
+        completion_lines = [f"元素“{element['name']}”已保存到元素库。", "", f"当前主定位：{locator_type}"]
+        if auto_bound_step:
+            completion_lines.extend(["", f"已自动绑定到节点：{auto_bound_step}"])
         self.show_completion_message(
             "元素采集完成",
-            f"元素“{element['name']}”已保存到元素库。\n\n当前主定位：{locator_type}",
+            "\n".join(completion_lines),
         )
 
     def add_common_elements(self):
@@ -1616,9 +1964,12 @@ class RPAMainWindow(QMainWindow):
             "input_file_name",
             "input_file_path",
             "input_fixed_text",
+            "upload_file",
         }:
             return
         step["config"]["target"] = element_name
+        if step["type"] == "upload_file":
+            step["config"]["upload_verified"] = False
         self.refresh_workflow_view(select_index=self.current_step_index)
         self.log(f"节点已绑定元素：{element_name}", "#60a5fa")
 
@@ -1708,12 +2059,41 @@ class RPAMainWindow(QMainWindow):
             elif step_type in {"click_image", "wait_image", "upload_file", "press_enter", "press_tab", "delete_current_file", "screenshot"}:
                 self.log(f"当前节点暂未接入自动执行，已跳过：{step['title']}", "#fbbf24")
 
+    def build_execution_readiness_report(self):
+        config_issues = []
+        foreground_steps = []
+        unverified_upload_steps = []
+        for index, step in enumerate(self.workflow_steps, start=1):
+            issue = self.get_step_config_issue(step)
+            if issue:
+                config_issues.append(f"{index:02d}. {step['title']}：{issue}")
+            if self.step_uses_foreground_io(step):
+                foreground_steps.append(f"{index:02d}. {step['title']}")
+            if step.get("type") == "upload_file" and step.get("config", {}).get("target") and not issue:
+                element = self.resolve_element_record(step.get("config", {}).get("target", ""))
+                if self.is_upload_compatible_element(element) and not self.is_upload_step_verified(step):
+                    unverified_upload_steps.append(f"{index:02d}. {step['title']}")
+        return config_issues, foreground_steps, unverified_upload_steps
+
+    def build_single_step_readiness(self, step, index):
+        issue = self.get_step_config_issue(step)
+        config_issues = [f"{index + 1:02d}. {step['title']}：{issue}"] if issue else []
+        foreground_steps = [f"{index + 1:02d}. {step['title']}"] if self.step_uses_foreground_io(step) else []
+        return config_issues, foreground_steps
+
     def run_actual_automation(self):
         manager = BrowserManager()
         try:
             if not self.latest_excel_path:
                 self.latest_excel_path = InvoiceParser.generate_excel(self.invoice_map, self.export_path_edit.text())
                 self.log(f"执行前已自动生成结果Excel：{self.latest_excel_path}", "#34d399")
+            _, foreground_steps, unverified_upload_steps = self.build_execution_readiness_report()
+            if foreground_steps:
+                self.log(f"以下节点执行时请勿操作鼠标键盘：{', '.join(foreground_steps)}", "#f59e0b")
+            else:
+                self.log("当前流程节点均为后台优先执行。", "#34d399")
+            if unverified_upload_steps:
+                self.log(f"以下上传节点尚未验证后台上传能力：{', '.join(unverified_upload_steps)}", "#f59e0b")
             start_url = self.get_browser_start_url()
             manager.start(
                 start_url,
@@ -1808,6 +2188,7 @@ class RPAMainWindow(QMainWindow):
             elif step_type == "click_image":
                 image = self.resolve_image_record(config.get("target", ""))
                 if image:
+                    self.log(f"节点“{step['title']}”正在使用图片识别点击，会占用前台鼠标。", "#f59e0b")
                     ok = ImageEngine.click_image(image["path"], threshold=float(config.get("threshold", 90)) / 100)
                     if not ok:
                         raise RuntimeError(f"未找到图片：{image['name']}")
@@ -1822,8 +2203,18 @@ class RPAMainWindow(QMainWindow):
                     if not pos:
                         raise RuntimeError(f"等待图片超时：{image['name']}")
             elif step_type == "upload_file":
-                pyautogui.write(row["file_path"])
-                pyautogui.press("enter")
+                element = self.resolve_element_record(config.get("target", ""))
+                uploaded = manager.upload_file(
+                    row["file_path"],
+                    element.get("locator_type") if element else None,
+                    element.get("locator_value") if element else None,
+                )
+                if not uploaded:
+                    if element and not self.is_upload_compatible_element(element):
+                        self.log(f"节点“{step['title']}”绑定的元素“{element['name']}”不是标准文件上传控件。", "#f59e0b")
+                    self.log(f"节点“{step['title']}”未找到网页上传控件，回退到 Windows 文件框输入。", "#f59e0b")
+                    pyautogui.write(row["file_path"])
+                    pyautogui.press("enter")
             elif step_type == "press_enter":
                 manager.press_key("Enter")
             elif step_type == "press_tab":
@@ -1846,13 +2237,24 @@ class RPAMainWindow(QMainWindow):
         if self.current_step_index < 0 or not self.invoice_rows:
             QMessageBox.information(self, "无法测试", "请先选择一个流程节点，并确保已解析至少一条发票记录。")
             return
+        step = self.workflow_steps[self.current_step_index]
+        config_issues, foreground_steps = self.build_single_step_readiness(step, self.current_step_index)
+        if config_issues:
+            QMessageBox.warning(self, "节点待配置", "当前节点还没有配置完整：\n\n" + "\n".join(config_issues))
+            self.log(f"节点测试未开始：{config_issues[0]}", "#ef4444")
+            return
+        if foreground_steps:
+            message = "当前节点测试时会占用前台鼠标/键盘：\n\n" + "\n".join(foreground_steps) + "\n\n确认继续测试吗？"
+            answer = QMessageBox.question(self, "测试前确认", message)
+            if answer != QMessageBox.Yes:
+                self.log("已取消节点测试：用户在测试前确认中终止。", "#f59e0b")
+                return
         manager = BrowserManager()
         try:
             manager.start(
                 self.get_browser_start_url(),
                 user_data_dir=self.get_scheme_profile_dir(self.current_scheme_name),
             )
-            step = self.workflow_steps[self.current_step_index]
             self.execute_workflow_for_order_runtime(manager, self.invoice_rows[0], steps=[step])
             self.show_completion_message("节点测试完成", f"节点“{step['title']}”已执行完成。")
         except Exception as exc:
@@ -1862,6 +2264,150 @@ class RPAMainWindow(QMainWindow):
                 manager.stop()
             except Exception:
                 pass
+
+    def test_upload_binding_current_step(self):
+        if self.current_step_index < 0 or not self.invoice_rows:
+            QMessageBox.information(self, "无法测试", "请先选择上传文件节点，并确保已解析至少一条发票记录。")
+            return
+        step = self.workflow_steps[self.current_step_index]
+        if step.get("type") != "upload_file":
+            QMessageBox.information(self, "节点不匹配", "当前节点不是“上传文件”节点。")
+            return
+        sample_row = self.invoice_rows[0]
+        sample_path = sample_row.get("file_path", "")
+        if not sample_path or not os.path.exists(sample_path):
+            QMessageBox.warning(self, "文件不存在", "测试上传控件需要一条有效的发票文件路径。")
+            return
+        config_issues, foreground_steps = self.build_single_step_readiness(step, self.current_step_index)
+        if config_issues:
+            QMessageBox.warning(self, "节点待配置", "当前上传节点还没有配置完整：\n\n" + "\n".join(config_issues))
+            return
+        element = self.resolve_element_record(step.get("config", {}).get("target", ""))
+        if not self.is_upload_compatible_element(element):
+            QMessageBox.warning(self, "控件类型不匹配", "当前绑定元素不是标准上传控件，建议先采集网页里的 input[type=file]。")
+            self.log("上传控件专项测试未开始：当前绑定元素不是标准上传控件。", "#ef4444")
+            return
+        manager = BrowserManager()
+        try:
+            manager.start(
+                self.get_browser_start_url(),
+                user_data_dir=self.get_scheme_profile_dir(self.current_scheme_name),
+            )
+            uploaded, error_message = self.run_upload_binding_check(manager, step, sample_path)
+            if not uploaded:
+                raise RuntimeError(error_message or "页面未接受该上传控件，后台上传测试失败。")
+            step["config"]["upload_verified"] = True
+            self.refresh_workflow_view(select_index=self.current_step_index)
+            self.update_preview()
+            self.show_completion_message(
+                "上传控件测试完成",
+                f"已成功向控件“{element['name']}”写入测试文件。\n\n测试文件：{sample_path}",
+            )
+            self.log(f"上传控件专项测试成功：{element['name']}", "#34d399")
+        except Exception as exc:
+            step["config"]["upload_verified"] = False
+            self.refresh_workflow_view(select_index=self.current_step_index)
+            self.update_preview()
+            QMessageBox.warning(self, "上传控件测试失败", str(exc))
+        finally:
+            try:
+                manager.stop()
+            except Exception:
+                pass
+
+    def run_upload_binding_check(self, manager, step, sample_path):
+        element = self.resolve_element_record(step.get("config", {}).get("target", ""))
+        if not element:
+            return False, "当前上传节点未绑定上传控件。"
+        if not self.is_upload_compatible_element(element):
+            return False, "当前绑定元素不是标准上传控件。"
+        try:
+            uploaded = manager.upload_file(
+                sample_path,
+                element.get("locator_type"),
+                element.get("locator_value"),
+            )
+        except Exception as exc:
+            return False, str(exc)
+        if not uploaded:
+            return False, "页面未接受该上传控件，后台上传测试失败。"
+        return True, ""
+
+    def verify_all_upload_steps(self):
+        if not self.workflow_steps:
+            QMessageBox.information(self, "暂无流程", "请先从左侧节点库搭建流程。")
+            return
+        if not self.invoice_rows:
+            QMessageBox.warning(self, "缺少数据", "批量验证上传节点前，请先选择并解析发票文件夹。")
+            return
+        sample_path = self.invoice_rows[0].get("file_path", "")
+        if not sample_path or not os.path.exists(sample_path):
+            QMessageBox.warning(self, "文件不存在", "批量验证上传节点需要一条有效的发票文件路径。")
+            return
+
+        upload_indices = [index for index, step in enumerate(self.workflow_steps) if step.get("type") == "upload_file"]
+        if not upload_indices:
+            QMessageBox.information(self, "无需验证", "当前流程里没有上传文件节点。")
+            return
+
+        manager = BrowserManager()
+        passed = []
+        failed = []
+        first_failed_index = -1
+        try:
+            manager.start(
+                self.get_browser_start_url(),
+                user_data_dir=self.get_scheme_profile_dir(self.current_scheme_name),
+            )
+            for index in upload_indices:
+                step = self.workflow_steps[index]
+                issue = self.get_step_config_issue(step)
+                if issue:
+                    step["config"]["upload_verified"] = False
+                    failed.append(f"{index + 1:02d}. {step['title']}：{issue}")
+                    if first_failed_index < 0:
+                        first_failed_index = index
+                    continue
+                uploaded, error_message = self.run_upload_binding_check(manager, step, sample_path)
+                step["config"]["upload_verified"] = bool(uploaded)
+                if uploaded:
+                    passed.append(f"{index + 1:02d}. {step['title']}")
+                else:
+                    failed.append(f"{index + 1:02d}. {step['title']}：{error_message}")
+                    if first_failed_index < 0:
+                        first_failed_index = index
+        except Exception as exc:
+            QMessageBox.warning(self, "批量验证失败", str(exc))
+            return
+        finally:
+            self.refresh_workflow_view(select_index=self.current_step_index)
+            self.update_preview()
+            try:
+                manager.stop()
+            except Exception:
+                pass
+
+        lines = [f"已验证上传节点：{len(passed)} 个"]
+        if passed:
+            lines.append("")
+            lines.append("验证通过：")
+            lines.extend(passed[:8])
+            if len(passed) > 8:
+                lines.append(f"另有 {len(passed) - 8} 个通过节点。")
+        if failed:
+            if first_failed_index >= 0:
+                self.refresh_workflow_view(select_index=first_failed_index)
+            lines.append("")
+            lines.append("验证失败：")
+            lines.extend(failed[:8])
+            if len(failed) > 8:
+                lines.append(f"另有 {len(failed) - 8} 个失败节点。")
+            QMessageBox.warning(self, "批量验证上传结果", "\n".join(lines))
+            self.log(f"批量验证上传完成：通过 {len(passed)} 个，失败 {len(failed)} 个。", "#f59e0b")
+            return
+
+        QMessageBox.information(self, "批量验证上传结果", "\n".join(lines))
+        self.log(f"批量验证上传完成：{len(passed)} 个上传节点全部通过。", "#34d399")
 
     def run_parsing_only(self):
         if not self.invoice_dir:
@@ -1876,6 +2422,32 @@ class RPAMainWindow(QMainWindow):
         if not self.workflow_steps:
             QMessageBox.warning(self, "缺少流程", "请先从左侧节点库搭建流程。")
             return
+        config_issues, foreground_steps, unverified_upload_steps = self.build_execution_readiness_report()
+        if config_issues:
+            message = "以下节点还没有配置完整，请先处理后再执行：\n\n" + "\n".join(config_issues[:10])
+            if len(config_issues) > 10:
+                message += f"\n\n另有 {len(config_issues) - 10} 个节点也待配置。"
+            QMessageBox.warning(self, "流程待配置", message)
+            self.log("执行前校验未通过：存在待配置节点。", "#ef4444")
+            return
+        if unverified_upload_steps:
+            message = "以下上传节点尚未验证后台上传能力：\n\n" + "\n".join(unverified_upload_steps[:10])
+            if len(unverified_upload_steps) > 10:
+                message += f"\n\n另有 {len(unverified_upload_steps) - 10} 个未验证上传节点。"
+            message += "\n\n建议先逐个点击“测试上传控件”。确认继续执行吗？"
+            answer = QMessageBox.question(self, "上传节点未验证", message)
+            if answer != QMessageBox.Yes:
+                self.log("已取消执行：存在未验证的上传节点。", "#f59e0b")
+                return
+        if foreground_steps:
+            message = "以下节点执行时会占用前台鼠标/键盘：\n\n" + "\n".join(foreground_steps[:10])
+            if len(foreground_steps) > 10:
+                message += f"\n\n另有 {len(foreground_steps) - 10} 个前台节点。"
+            message += "\n\n确认继续执行吗？"
+            answer = QMessageBox.question(self, "执行前确认", message)
+            if answer != QMessageBox.Yes:
+                self.log("已取消执行：用户在执行前确认中终止。", "#f59e0b")
+                return
         self.log("开始执行真实流程，复用当前方案登录状态。", "#60a5fa")
         self.run_actual_automation()
 

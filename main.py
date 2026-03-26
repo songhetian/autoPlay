@@ -1118,11 +1118,11 @@ class RPAMainWindow(QMainWindow):
         if not issue:
             return None, None
         if step_type in {"click_element", "double_click_element", "wait_element"} and not (config.get("target") or "").strip():
-            return ("采集目标元素", lambda: self.capture_element_with_defaults("目标元素", "按钮"))
+            return ("采集目标元素", lambda: self.launch_capture_for_step("目标元素", "按钮", "正在为当前节点打开智能获取元素。"))
         if step_type in {"focus_element", "input_order_no", "input_file_name", "input_file_path", "input_fixed_text"} and not (config.get("target") or "").strip():
-            return ("采集输入框", lambda: self.capture_element_with_defaults("输入框", "输入框"))
+            return ("采集输入框", lambda: self.launch_capture_for_step("输入框", "输入框", "正在为当前节点打开智能获取元素（输入框）。"))
         if step_type == "upload_file" and not (config.get("target") or "").strip():
-            return ("采集上传控件", lambda: self.capture_element_with_defaults("文件上传控件", "上传控件"))
+            return ("采集上传控件", lambda: self.launch_capture_for_step("文件上传控件", "上传控件", "正在为当前节点打开智能获取元素（上传控件）。"))
         if step_type in {"click_image", "wait_image"} and not (config.get("target") or "").strip():
             return ("导入图片", self.import_image)
         return None, None
@@ -1698,6 +1698,10 @@ class RPAMainWindow(QMainWindow):
     def capture_element(self):
         self.capture_element_with_defaults()
 
+    def launch_capture_for_step(self, default_name, default_role, log_message):
+        self.log(log_message, "#60a5fa")
+        self.capture_element_with_defaults(default_name, default_role)
+
     def open_login_browser(self):
         page_url, ok = QInputDialog.getText(
             self,
@@ -1973,6 +1977,8 @@ class RPAMainWindow(QMainWindow):
 
     def bind_selected_element(self, element_name):
         if self.current_step_index < 0:
+            QMessageBox.information(self, "未选择节点", "请先在中间流程画布里选中一个节点，再点击左侧元素条目进行绑定。")
+            self.log("元素绑定未生效：当前还没有选中流程节点。", "#f59e0b")
             return
         step = self.workflow_steps[self.current_step_index]
         if step["type"] not in {
@@ -1986,6 +1992,8 @@ class RPAMainWindow(QMainWindow):
             "input_fixed_text",
             "upload_file",
         }:
+            QMessageBox.information(self, "节点类型不匹配", f"当前节点“{step['title']}”不支持绑定元素，请先选择元素类节点。")
+            self.log(f"元素绑定未生效：当前节点“{step['title']}”不是可绑定元素的类型。", "#f59e0b")
             return
         step["config"]["target"] = element_name
         if step["type"] == "upload_file":
@@ -1995,9 +2003,13 @@ class RPAMainWindow(QMainWindow):
 
     def bind_selected_image(self, image_name):
         if self.current_step_index < 0:
+            QMessageBox.information(self, "未选择节点", "请先在中间流程画布里选中一个节点，再点击左侧图片条目进行绑定。")
+            self.log("图片绑定未生效：当前还没有选中流程节点。", "#f59e0b")
             return
         step = self.workflow_steps[self.current_step_index]
         if step["type"] not in {"click_image", "wait_image"}:
+            QMessageBox.information(self, "节点类型不匹配", f"当前节点“{step['title']}”不支持绑定图片，请先选择图片类节点。")
+            self.log(f"图片绑定未生效：当前节点“{step['title']}”不是可绑定图片的类型。", "#f59e0b")
             return
         step["config"]["target"] = image_name
         self.refresh_workflow_view(select_index=self.current_step_index)

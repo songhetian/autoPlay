@@ -513,7 +513,7 @@ class RPAMainWindow(QMainWindow):
         self.preview_box = QTextEdit()
         self.preview_box.setReadOnly(True)
         preview_layout.addWidget(self.preview_box)
-        right_layout.addWidget(preview_group, 2)
+        right_layout.addWidget(preview_group, 1)
 
         run_group = QGroupBox("运行")
         run_layout = QVBoxLayout(run_group)
@@ -554,16 +554,26 @@ class RPAMainWindow(QMainWindow):
 
         log_group = QGroupBox("日志")
         log_layout = QVBoxLayout(log_group)
+        log_btn_row = QHBoxLayout()
+        clear_log_btn = QPushButton("清空日志")
+        clear_log_btn.clicked.connect(self.clear_log_view)
+        copy_log_btn = QPushButton("复制日志")
+        copy_log_btn.clicked.connect(self.copy_log_view)
+        log_btn_row.addWidget(clear_log_btn)
+        log_btn_row.addWidget(copy_log_btn)
+        log_btn_row.addStretch()
+        log_layout.addLayout(log_btn_row)
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setStyleSheet("background:#111827;color:#d1d5db;font-family:Consolas;")
+        self.log_view.setMinimumHeight(320)
         log_layout.addWidget(self.log_view)
-        right_layout.addWidget(log_group, 2)
+        right_layout.addWidget(log_group, 4)
 
         main_splitter.addWidget(left_panel)
         main_splitter.addWidget(center_panel)
         main_splitter.addWidget(right_panel)
-        main_splitter.setSizes([320, 640, 420])
+        main_splitter.setSizes([300, 620, 520])
 
         self.setStyleSheet(
             """
@@ -645,6 +655,16 @@ class RPAMainWindow(QMainWindow):
         self.log_view.append(
             f'<span style="color:#64748b;">[{now}]</span> <span style="color:{color};">{text}</span>'
         )
+        scrollbar = self.log_view.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def clear_log_view(self):
+        self.log_view.clear()
+        self.log("日志已清空。", "#94a3b8")
+
+    def copy_log_view(self):
+        QApplication.clipboard().setText(self.log_view.toPlainText())
+        self.log("日志内容已复制到剪贴板。", "#94a3b8")
 
     def show_completion_message(self, title, message):
         box = QMessageBox(self)

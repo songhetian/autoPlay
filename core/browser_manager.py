@@ -15,6 +15,7 @@ class BrowserManager:
         self.is_picking = False
         self.pick_result = None
         self._lock = threading.Lock()
+        self._picker_exposed = False
 
     def start(self, url="about:blank", user_data_dir=None):
         self._configure_browser_runtime_path()
@@ -71,90 +72,128 @@ class BrowserManager:
 
         self.is_picking = True
         self.pick_result = None
-        self.page.expose_function("py_element_picked", self._on_element_picked)
-        self.page.evaluate(
-            """
-            (() => {
-              if (window.__rpaPickerInstalled) return;
-              window.__rpaPickerInstalled = true;
+        if not self._picker_exposed:
+            self.page.expose_function("py_element_picked", self._on_element_picked)
+            self._picker_exposed = True
 
-              const style = document.createElement('style');
-              style.id = 'rpa-picker-style';
-              style.textContent = `
-                .rpa-picker-hover {
-                  outline: 2px solid #2563eb !important;
-                  background: rgba(37, 99, 235, 0.10) !important;
-                  cursor: crosshair !important;
-                }
-              `;
-              document.head.appendChild(style);
+        picker_script = """
+        (() => {
+          if (window.__rpaPickerInstalled) return;
+          window.__rpaPickerInstalled = true;
 
-              let lastEl = null;
-
-              function buildCss(el) {
-                if (!(el instanceof Element)) return '';
-                if (el.id) return `#${CSS.escape(el.id)}`;
-                const parts = [];
-                while (el && el.nodeType === 1 && el !== document.body) {
-                  let part = el.nodeName.toLowerCase();
-                  if (el.classList.length) {
-                    const cls = Array.from(el.classList).slice(0, 2).map(c => `.${CSS.escape(c)}`).join('');
-                    if (cls) part += cls;
-                  }
-                  const siblings = el.parentNode ? Array.from(el.parentNode.children).filter(n => n.nodeName === el.nodeName) : [];
-                  if (siblings.length > 1) {
-                    const index = siblings.indexOf(el) + 1;
-                    part += `:nth-of-type(${index})`;
-                  }
-                  parts.unshift(part);
-                  el = el.parentElement;
-                }
-                return parts.join(' > ');
+          const installStyle = () => {
+            if (document.getElementById('rpa-picker-style')) return;
+            const style = document.createElement('style');
+            style.id = 'rpa-picker-style';
+            style.textContent = `
+              .rpa-picker-hover {
+                outline: 2px solid #2563eb !important;
+                background: rgba(37, 99, 235, 0.10) !important;
+                cursor: crosshair !important;
               }
-
-              function buildXpath(el) {
-                if (!(el instanceof Element)) return '';
-                if (el.id) return `//*[@id="${el.id}"]`;
-                const parts = [];
-                while (el && el.nodeType === 1) {
-                  let index = 1;
-                  let sibling = el.previousElementSibling;
-                  while (sibling) {
-                    if (sibling.nodeName === el.nodeName) index += 1;
-                    sibling = sibling.previousElementSibling;
-                  }
-                  parts.unshift(`${el.nodeName.toLowerCase()}[${index}]`);
-                  el = el.parentElement;
-                }
-                return '/' + parts.join('/');
+              #rpa-picker-tip {
+                position: fixed;
+                top: 12px;
+                right: 12px;
+                z-index: 2147483647;
+                padding: 8px 12px;
+                border-radius: 8px;
+                background: rgba(15, 23, 42, 0.88);
+                color: #fff;
+                font-size: 12px;
+                line-height: 1.4;
+                box-shadow: 0 8px 30px rgba(15, 23, 42, 0.28);
+                pointer-events: none;
               }
+            `;
+            document.head.appendChild(style);
+          };
 
-              function bestText(el) {
-                const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
-                return text.slice(0, 40);
+          const installTip = () => {
+            if (document.getElementById('rpa-picker-tip')) return;
+            const tip = document.createElement('div');
+            tip.id = 'rpa-picker-tip';
+            tip.textContent = '普通点击采集元素；按住 Shift 再点击可正常打开链接或切换页面';
+            document.body.appendChild(tip);
+          };
+
+          let lastEl = null;
+
+          function buildCss(el) {
+            if (!(el instanceof Element)) return '';
+            if (el.id) return `#${CSS.escape(el.id)}`;
+            const parts = [];
+            while (el && el.nodeType === 1 && el !== document.body) {
+              let part = el.nodeName.toLowerCase();
+              if (el.classList.length) {
+                const cls = Array.from(el.classList).slice(0, 2).map(c => `.${CSS.escape(c)}`).join('');
+                if (cls) part += cls;
               }
+              const siblings = el.parentNode ? Array.from(el.parentNode.children).filter(n => n.nodeName === el.nodeName) : [];
+              if (siblings.length > 1) {
+                const index = siblings.indexOf(el) + 1;
+                part += `:nth-of-type(${index})`;
+              }
+              parts.unshift(part);
+              el = el.parentElement;
+            }
+            return parts.join(' > ');
+          }
 
-              document.addEventListener('mouseover', (event) => {
-                if (lastEl) lastEl.classList.remove('rpa-picker-hover');
-                event.target.classList.add('rpa-picker-hover');
-                lastEl = event.target;
-              }, true);
+          function buildXpath(el) {
+            if (!(el instanceof Element)) return '';
+            if (el.id) return `//*[@id="${el.id}"]`;
+            const parts = [];
+            while (el && el.nodeType === 1) {
+              let index = 1;
+              let sibling = el.previousElementSibling;
+              while (sibling) {
+                if (sibling.nodeName === el.nodeName) index += 1;
+                sibling = sibling.previousElementSibling;
+              }
+              parts.unshift(`${el.nodeName.toLowerCase()}[${index}]`);
+              el = el.parentElement;
+            }
+            return '/' + parts.join('/');
+          }
 
-              document.addEventListener('click', (event) => {
-                if (!window.__rpaPickerInstalled) return;
-                event.preventDefault();
-                event.stopPropagation();
-                const el = event.target;
-                window.py_element_picked({
-                  tag: el.tagName.toLowerCase(),
-                  text: bestText(el),
-                  css: buildCss(el),
-                  xpath: buildXpath(el),
-                });
-              }, true);
-            })();
-            """
-        )
+          function bestText(el) {
+            const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+            return text.slice(0, 40);
+          }
+
+          installStyle();
+          installTip();
+
+          document.addEventListener('mouseover', (event) => {
+            if (lastEl) lastEl.classList.remove('rpa-picker-hover');
+            if (event.target instanceof Element) {
+              event.target.classList.add('rpa-picker-hover');
+              lastEl = event.target;
+            }
+          }, true);
+
+          document.addEventListener('click', (event) => {
+            if (!window.__rpaPickerInstalled) return;
+            if (event.shiftKey) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            const el = event.target;
+            if (!(el instanceof Element)) return;
+            window.py_element_picked({
+              tag: el.tagName.toLowerCase(),
+              text: bestText(el),
+              css: buildCss(el),
+              xpath: buildXpath(el),
+              href: el.closest('a[href]')?.href || '',
+            });
+          }, true);
+        })();
+        """
+        self.page.add_init_script(picker_script)
+        self.page.evaluate(picker_script)
 
     def wait_for_pick(self, timeout=300):
         start = time.time()

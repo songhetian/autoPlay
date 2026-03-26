@@ -1456,7 +1456,7 @@ class RPAMainWindow(QMainWindow):
                 user_data_dir=self.get_scheme_profile_dir(capture_context["scheme_name"]),
             )
             manager.enable_picker()
-            self.browser_status_signal.emit("浏览器已进入采集模式，请把鼠标移到目标元素上后点击一次。")
+            self.browser_status_signal.emit("浏览器已进入采集模式：普通点击采集元素，按住 Shift 再点击可正常打开链接或切换页面。")
             result = manager.wait_for_pick(timeout=300)
             if not result:
                 self.browser_status_signal.emit("元素采集超时或未成功。")

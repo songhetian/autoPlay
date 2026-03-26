@@ -1,0 +1,23 @@
+[
+  {
+    "name": "查询按钮",
+    "locator_type": "查询入口",
+    "locator_value": "订单号输入框右侧",
+    "note": "填完订单号点击查询",
+    "status": "待采集"
+  },
+  {
+    "name": "上传发票按钮",
+    "locator_type": "上传入口",
+    "locator_value": "订单详情区域",
+    "note": "打开文件选择框",
+    "status": "待采集"
+  },
+  {
+    "name": "上传确认按钮",
+    "locator_type": "确认按钮",
+    "locator_value": "上传弹窗右下角",
+    "note": "选择文件后确认上传",
+    "status": "待采集"
+  }
+]

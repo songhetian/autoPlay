@@ -1,3 +1,14 @@
-2026/03/26-13:21:56.926 671c Reusing MANIFEST E:\tools\fapiao\data\browser_profiles\默认方案\Default\Local Storage\leveldb/MANIFEST-000001
-2026/03/26-13:21:56.930 671c Recovering log #3
-2026/03/26-13:21:56.932 671c Reusing old log E:\tools\fapiao\data\browser_profiles\默认方案\Default\Local Storage\leveldb/000003.log 
+2026/03/26-14:54:02.035 67d0 Reusing MANIFEST E:\tools\fapiao\data\browser_profiles\默认方案\Default\Local Storage\leveldb/MANIFEST-000001
+2026/03/26-14:54:02.040 67d0 Recovering log #17
+2026/03/26-14:54:02.041 67d0 Level-0 table #19: started
+2026/03/26-14:54:02.047 67d0 Level-0 table #19: 13022 bytes OK
+2026/03/26-14:54:02.052 67d0 Delete type=0 #17
+2026/03/26-14:54:02.052 4858 Compacting 4@0 + 1@1 files
+2026/03/26-14:54:02.060 4858 Generated table #21@0: 6 keys, 13350 bytes
+2026/03/26-14:54:02.060 4858 Compacted 4@0 + 1@1 files => 13350 bytes
+2026/03/26-14:54:02.066 4858 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/03/26-14:54:02.068 4858 Delete type=2 #8
+2026/03/26-14:54:02.068 4858 Delete type=2 #11
+2026/03/26-14:54:02.068 4858 Delete type=2 #14
+2026/03/26-14:54:02.068 4858 Delete type=2 #16
+2026/03/26-14:54:02.068 4858 Delete type=2 #19

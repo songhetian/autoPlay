@@ -1,0 +1,53 @@
+[
+  {
+    "name": "默认方案",
+    "invoice_dir": "E:/tools/fapiao/发票批量下载_20260323110528",
+    "export_dir": "C:\\Users\\Song\\Desktop",
+    "workflow_steps": [
+      {
+        "type": "open_browser",
+        "title": "打开网页",
+        "category": "启动",
+        "description": "打开浏览器并进入上传页面",
+        "config": {
+          "url": "https://mms.pinduoduo.com/invoice/center?msfrom=mms_sidenav"
+        }
+      },
+      {
+        "type": "wait",
+        "title": "固定等待",
+        "category": "流程控制",
+        "description": "固定等待若干秒",
+        "config": {
+          "seconds": 2
+        }
+      },
+      {
+        "type": "click_element",
+        "title": "点击元素",
+        "category": "网页操作",
+        "description": "点击元素库中的控件",
+        "config": {
+          "target": "订单输入框"
+        }
+      },
+      {
+        "type": "press_enter",
+        "title": "按回车",
+        "category": "流程控制",
+        "description": "向当前焦点发送 Enter",
+        "config": {}
+      }
+    ],
+    "capture_url": "https://mms.pinduoduo.com/invoice/center?msfrom=mms_sidenav",
+    "retry_count": 1
+  },
+  {
+    "name": "发票上传",
+    "invoice_dir": "",
+    "export_dir": "C:\\Users\\Song\\Desktop",
+    "workflow_steps": [],
+    "capture_url": "https://example.com",
+    "retry_count": 1
+  }
+]

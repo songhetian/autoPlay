@@ -1,3 +1,5 @@
-2026/03/26-13:22:50.089 61f0 Reusing MANIFEST E:\tools\fapiao\data\browser_profiles\默认方案\Default\Local Storage\leveldb/MANIFEST-000001
-2026/03/26-13:22:50.094 61f0 Recovering log #3
-2026/03/26-13:22:50.095 61f0 Reusing old log E:\tools\fapiao\data\browser_profiles\默认方案\Default\Local Storage\leveldb/000003.log 
+2026/03/26-15:01:03.791 4a4 Reusing MANIFEST E:\tools\fapiao\data\browser_profiles\默认方案\Default\Local Storage\leveldb/MANIFEST-000001
+2026/03/26-15:01:03.801 4a4 Recovering log #20
+2026/03/26-15:01:03.802 4a4 Level-0 table #23: started
+2026/03/26-15:01:03.813 4a4 Level-0 table #23: 13022 bytes OK
+2026/03/26-15:01:03.821 4a4 Delete type=0 #20

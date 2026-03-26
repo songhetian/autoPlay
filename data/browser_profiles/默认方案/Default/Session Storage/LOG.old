@@ -1,3 +1,5 @@
-2026/03/26-13:21:57.018 671c Reusing MANIFEST E:\tools\fapiao\data\browser_profiles\默认方案\Default\Session Storage/MANIFEST-000001
-2026/03/26-13:21:57.019 671c Recovering log #3
-2026/03/26-13:21:57.022 671c Reusing old log E:\tools\fapiao\data\browser_profiles\默认方案\Default\Session Storage/000003.log 
+2026/03/26-14:54:02.224 67d0 Reusing MANIFEST E:\tools\fapiao\data\browser_profiles\默认方案\Default\Session Storage/MANIFEST-000001
+2026/03/26-14:54:02.228 67d0 Recovering log #3
+2026/03/26-14:54:02.229 67d0 Level-0 table #3: started
+2026/03/26-14:54:02.245 67d0 Level-0 table #3: 15554 bytes OK
+2026/03/26-14:54:02.265 67d0 Delete type=0 #3

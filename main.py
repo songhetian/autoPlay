@@ -141,14 +141,27 @@ class LibraryList(QListWidget):
 
 class WorkflowList(QListWidget):
     step_selected = Signal(int)
+    drag_reordered = Signal(list)  # 发出新顺序的原始索引列表
 
     def __init__(self):
         super().__init__()
+        self._drag_order = []  # 拖拽前的顺序快照
         self.setDragDropMode(QAbstractItemView.InternalMove)
         self.setDefaultDropAction(Qt.MoveAction)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.setSpacing(10)
+        self.setSpacing(8)
         self.currentRowChanged.connect(self.step_selected.emit)
+
+    def mousePressEvent(self, event):
+        # 记录拖拽前每行携带的原始步骤数据
+        self._drag_order = [self.item(i).data(Qt.UserRole) for i in range(self.count())]
+        super().mousePressEvent(event)
+
+    def dropEvent(self, event):
+        super().dropEvent(event)
+        # 拖拽完成后，读出当前每行数据，发出新顺序
+        new_order = [self.item(i).data(Qt.UserRole) for i in range(self.count())]
+        self.drag_reordered.emit(new_order)
 
 
 class ElementEditorDialog(QDialog):
@@ -339,8 +352,18 @@ class RPAMainWindow(QMainWindow):
         source_layout.addLayout(row)
         root.addWidget(source_group)
 
+        # ── 主区域：上部三栏 + 下部底栏 ──────────────────────────────────────
+        vertical_splitter = QSplitter(Qt.Vertical)
+        root.addWidget(vertical_splitter, 1)
+
+        # 上部：三栏水平分割
+        top_widget = QWidget()
+        top_layout = QHBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(0)
         main_splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(main_splitter, 1)
+        top_layout.addWidget(main_splitter)
+        vertical_splitter.addWidget(top_widget)
 
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
@@ -433,57 +456,59 @@ class RPAMainWindow(QMainWindow):
         image_layout.addWidget(self.image_library)
         library_tabs.addTab(image_tab, "图片库")
 
+        # ── 中间：流程画布 + 解析结果 ─────────────────────────────────────────
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
         center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(12)
+        center_layout.setSpacing(8)
 
         canvas_group = QGroupBox("流程画布")
         canvas_layout = QVBoxLayout(canvas_group)
-        hint = QLabel("参考影刀式线性节点流：拖动排序，点击节点在右侧编辑参数。")
-        hint.setStyleSheet("color:#64748b;")
+        canvas_layout.setSpacing(6)
+        hint = QLabel("拖动节点可排序 · 点击节点在右侧编辑属性")
+        hint.setStyleSheet("color:#64748b;font-size:12px;")
         canvas_layout.addWidget(hint)
         self.workflow_status_label = QLabel("流程统计：共 0 个节点，已配置 0 个，待配置 0 个，前台节点 0 个")
         self.workflow_status_label.setWordWrap(True)
-        self.workflow_status_label.setStyleSheet("color:#475569;background:#f8fafc;padding:8px 10px;border-radius:8px;")
+        self.workflow_status_label.setStyleSheet("color:#475569;background:#f8fafc;padding:6px 10px;border-radius:6px;font-size:12px;")
         canvas_layout.addWidget(self.workflow_status_label)
 
         canvas_btn_row = QHBoxLayout()
-        clear_flow_btn = QPushButton("清空流程")
+        canvas_btn_row.setSpacing(5)
+        clear_flow_btn = QPushButton("清空")
+        clear_flow_btn.setToolTip("清空所有流程节点")
         clear_flow_btn.clicked.connect(self.clear_workflow)
-        remove_step_btn = QPushButton("删除当前节点")
+        remove_step_btn = QPushButton("删除节点")
         remove_step_btn.clicked.connect(self.remove_step)
-        move_up_btn = QPushButton("上移")
-        move_up_btn.clicked.connect(lambda: self.move_step(-1))
-        move_down_btn = QPushButton("下移")
-        move_down_btn.clicked.connect(lambda: self.move_step(1))
         inspect_flow_btn = QPushButton("流程体检")
         inspect_flow_btn.clicked.connect(self.inspect_workflow)
-        verify_upload_btn = QPushButton("批量验证上传")
+        verify_upload_btn = QPushButton("验证上传")
+        verify_upload_btn.setToolTip("批量验证上传控件")
         verify_upload_btn.clicked.connect(self.verify_all_upload_steps)
+        test_step_btn = QPushButton("测试节点")
+        test_step_btn.setToolTip("测试当前选中节点")
+        test_step_btn.clicked.connect(self.test_current_step)
         canvas_btn_row.addWidget(clear_flow_btn)
         canvas_btn_row.addWidget(remove_step_btn)
-        canvas_btn_row.addWidget(move_up_btn)
-        canvas_btn_row.addWidget(move_down_btn)
         canvas_btn_row.addWidget(inspect_flow_btn)
         canvas_btn_row.addWidget(verify_upload_btn)
-        test_step_btn = QPushButton("测试当前节点")
-        test_step_btn.clicked.connect(self.test_current_step)
         canvas_btn_row.addWidget(test_step_btn)
         canvas_btn_row.addStretch()
         canvas_layout.addLayout(canvas_btn_row)
 
         self.workflow_list = WorkflowList()
         self.workflow_list.step_selected.connect(self.on_step_selected)
+        self.workflow_list.drag_reordered.connect(self.on_workflow_drag_reordered)
         canvas_layout.addWidget(self.workflow_list, 1)
         center_layout.addWidget(canvas_group, 3)
 
         parsed_group = QGroupBox("文件夹解析结果")
         parsed_layout = QVBoxLayout(parsed_group)
+        parsed_layout.setSpacing(6)
         token_row = QHBoxLayout()
-        token_row.addWidget(self.make_token("订单号变量", "{{current.order_no}}"))
-        token_row.addWidget(self.make_token("文件名变量", "{{current.file_name}}"))
-        token_row.addWidget(self.make_token("文件路径变量", "{{current.file_path}}"))
+        token_row.addWidget(self.make_token("订单号", "{{current.order_no}}"))
+        token_row.addWidget(self.make_token("文件名", "{{current.file_name}}"))
+        token_row.addWidget(self.make_token("文件路径", "{{current.file_path}}"))
         token_row.addStretch()
         parsed_layout.addLayout(token_row)
 
@@ -496,68 +521,86 @@ class RPAMainWindow(QMainWindow):
         parsed_layout.addWidget(self.parsed_table)
         center_layout.addWidget(parsed_group, 2)
 
+        # ── 右侧：节点属性（独占） ──────────────────────────────────────────
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(12)
+        right_layout.setSpacing(6)
 
         property_group = QGroupBox("节点属性")
         self.property_layout = QVBoxLayout(property_group)
-        self.property_layout.setContentsMargins(12, 12, 12, 12)
+        self.property_layout.setContentsMargins(12, 14, 12, 12)
+        self.property_layout.setSpacing(8)
         self.property_hint = QLabel("选择一个流程节点后，在这里配置目标元素、图片和变量绑定。")
         self.property_hint.setWordWrap(True)
         self.property_hint.setStyleSheet("color:#64748b;")
         self.property_layout.addWidget(self.property_hint)
-        right_layout.addWidget(property_group, 3)
+        right_layout.addWidget(property_group, 7)
 
-        preview_group = QGroupBox("当前节点执行预览")
+        preview_group = QGroupBox("执行预览")
         preview_layout = QVBoxLayout(preview_group)
+        preview_layout.setContentsMargins(8, 10, 8, 8)
         self.preview_box = QTextEdit()
         self.preview_box.setReadOnly(True)
-        self.preview_box.setMinimumHeight(120)
+        self.preview_box.setMaximumHeight(110)
         preview_layout.addWidget(self.preview_box)
-        right_layout.addWidget(preview_group, 1)
+        right_layout.addWidget(preview_group, 3)
 
-        run_group = QGroupBox("运行")
-        run_layout = QVBoxLayout(run_group)
-        retry_row = QHBoxLayout()
-        retry_row.addWidget(QLabel("失败重试"))
+        main_splitter.addWidget(left_panel)
+        main_splitter.addWidget(center_panel)
+        main_splitter.addWidget(right_panel)
+        main_splitter.setSizes([290, 580, 480])
+
+        # ── 底部 Tab：运行 + 日志 ──────────────────────────────────────────
+        bottom_tabs = QTabWidget()
+        bottom_tabs.setMaximumHeight(260)
+        vertical_splitter.addWidget(bottom_tabs)
+        vertical_splitter.setSizes([9999, 240])
+
+        # 运行 Tab
+        run_tab = QWidget()
+        run_tab_layout = QVBoxLayout(run_tab)
+        run_tab_layout.setContentsMargins(8, 8, 8, 8)
+        run_tab_layout.setSpacing(6)
+        run_top_row = QHBoxLayout()
+        retry_label = QLabel("失败重试")
         self.retry_spin = QSpinBox()
         self.retry_spin.setRange(1, 5)
         self.retry_spin.setValue(1)
-        retry_row.addWidget(self.retry_spin)
-        retry_row.addStretch()
-        run_layout.addLayout(retry_row)
-        stats_row = QHBoxLayout()
+        run_top_row.addWidget(retry_label)
+        run_top_row.addWidget(self.retry_spin)
+        run_top_row.addSpacing(20)
         self.total_stat_label = QLabel("总数 0")
         self.success_stat_label = QLabel("成功 0")
         self.failed_stat_label = QLabel("失败 0")
-        stats_row.addWidget(self.total_stat_label)
-        stats_row.addWidget(self.success_stat_label)
-        stats_row.addWidget(self.failed_stat_label)
-        stats_row.addStretch()
-        run_layout.addLayout(stats_row)
+        for lbl in (self.total_stat_label, self.success_stat_label, self.failed_stat_label):
+            lbl.setStyleSheet("font-weight:600;padding:2px 8px;border-radius:4px;background:#f1f5f9;")
+        run_top_row.addWidget(self.total_stat_label)
+        run_top_row.addWidget(self.success_stat_label)
+        run_top_row.addWidget(self.failed_stat_label)
+        run_top_row.addStretch()
+        self.parse_only_btn = QPushButton("仅解析并导出 Excel")
+        self.parse_only_btn.clicked.connect(self.run_parsing_only)
+        self.run_btn = QPushButton("▶  开始批量执行")
+        self.run_btn.clicked.connect(self.start_automation)
+        self.run_btn.setStyleSheet(
+            "background:#15803d;color:white;font-size:14px;font-weight:700;padding:8px 18px;border-radius:6px;border:none;"
+        )
+        run_top_row.addWidget(self.parse_only_btn)
+        run_top_row.addWidget(self.run_btn)
+        run_tab_layout.addLayout(run_top_row)
         self.order_table = QTableWidget(0, 3)
         self.order_table.setHorizontalHeaderLabels(["订单号", "状态", "详情"])
         self.order_table.horizontalHeader().setStretchLastSection(True)
         self.order_table.verticalHeader().setVisible(False)
-        self.order_table.setMinimumHeight(180)
-        run_layout.addWidget(self.order_table)
-        run_btn_row = QHBoxLayout()
-        self.parse_only_btn = QPushButton("仅解析并导出 Excel")
-        self.parse_only_btn.clicked.connect(self.run_parsing_only)
-        self.run_btn = QPushButton("开始批量执行")
-        self.run_btn.clicked.connect(self.start_automation)
-        self.run_btn.setStyleSheet(
-            "background:#15803d;color:white;font-size:16px;font-weight:700;padding:10px;border-radius:6px;"
-        )
-        run_btn_row.addWidget(self.parse_only_btn)
-        run_btn_row.addWidget(self.run_btn)
-        run_layout.addLayout(run_btn_row)
-        right_layout.addWidget(run_group)
+        run_tab_layout.addWidget(self.order_table)
+        bottom_tabs.addTab(run_tab, "🚀 运行")
 
-        log_group = QGroupBox("日志")
-        log_layout = QVBoxLayout(log_group)
+        # 日志 Tab
+        log_tab = QWidget()
+        log_tab_layout = QVBoxLayout(log_tab)
+        log_tab_layout.setContentsMargins(8, 8, 8, 8)
+        log_tab_layout.setSpacing(4)
         log_btn_row = QHBoxLayout()
         clear_log_btn = QPushButton("清空日志")
         clear_log_btn.clicked.connect(self.clear_log_view)
@@ -566,18 +609,12 @@ class RPAMainWindow(QMainWindow):
         log_btn_row.addWidget(clear_log_btn)
         log_btn_row.addWidget(copy_log_btn)
         log_btn_row.addStretch()
-        log_layout.addLayout(log_btn_row)
+        log_tab_layout.addLayout(log_btn_row)
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setStyleSheet("background:#111827;color:#d1d5db;font-family:Consolas;")
-        self.log_view.setMinimumHeight(180)
-        log_layout.addWidget(self.log_view)
-        right_layout.addWidget(log_group, 4)
-
-        main_splitter.addWidget(left_panel)
-        main_splitter.addWidget(center_panel)
-        main_splitter.addWidget(right_panel)
-        main_splitter.setSizes([300, 620, 520])
+        self.log_view.setStyleSheet("background:#111827;color:#d1d5db;font-family:Consolas;font-size:12px;")
+        log_tab_layout.addWidget(self.log_view)
+        bottom_tabs.addTab(log_tab, "📋 日志")
 
         self.setStyleSheet(
             """
@@ -1307,6 +1344,15 @@ class RPAMainWindow(QMainWindow):
             self.workflow_steps[index],
         )
         self.refresh_workflow_view(select_index=new_index)
+
+    def on_workflow_drag_reordered(self, new_step_list):
+        """拖拽排序完成后，用列表中 item 的 UserRole 数据重建 workflow_steps"""
+        if not new_step_list:
+            return
+        self.workflow_steps = [step for step in new_step_list if step is not None]
+        # 保持当前选中行
+        current_row = self.workflow_list.currentRow()
+        self.refresh_workflow_view(select_index=max(0, current_row))
 
     def on_step_selected(self, index):
         self.current_step_index = index

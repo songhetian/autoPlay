@@ -1,0 +1,11 @@
+[
+  {
+    "name": "订单输入框",
+    "element_role": "输入框",
+    "locator_type": "文本匹配",
+    "locator_value": "/html/body/div[1]/div/div/div/main/div/div/div/div/div/div[6]/div[3]/div/div/div[1]/div/div[2]/div/div/div/div/div/input",
+    "area": "页面中部分",
+    "note": "",
+    "status": "已录入"
+  }
+]

@@ -15,11 +15,11 @@ class BrowserManager:
         self.is_picking = False
         self.pick_result = None
         self._lock = threading.Lock()
-        self._picker_exposed = False
         self._picker_script = """
         (() => {
           if (window.__rpaPickerInstalled) return;
           window.__rpaPickerInstalled = true;
+          window.__rpaPickedElement = null;
 
           const installStyle = () => {
             if (document.getElementById('rpa-picker-style')) return;
@@ -118,7 +118,7 @@ class BrowserManager:
           function submitPick(el) {
             if (pickLocked || !(el instanceof Element)) return;
             pickLocked = true;
-            Promise.resolve(window.py_element_picked({
+            window.__rpaPickedElement = {
               tag: el.tagName.toLowerCase(),
               text: bestText(el),
               css: buildCss(el),
@@ -127,9 +127,7 @@ class BrowserManager:
               inputType: el.getAttribute('type') || '',
               accept: el.getAttribute('accept') || '',
               isFileInput: el.matches('input[type="file"]'),
-            })).catch(() => {
-              pickLocked = false;
-            });
+            };
           }
 
           document.addEventListener('mousedown', (event) => {
@@ -223,16 +221,26 @@ class BrowserManager:
         self.page = None
         self.is_picking = False
 
+    def is_available(self):
+        try:
+            return bool(self.page) and not self.page.is_closed()
+        except Exception:
+            return False
+
+    def current_url(self):
+        if not self.is_available():
+            return ""
+        try:
+            return self.page.url or ""
+        except Exception:
+            return ""
+
     def enable_picker(self):
         if not self.page:
             raise RuntimeError("browser not started")
 
         self.is_picking = True
         self.pick_result = None
-        if not self._picker_exposed:
-            self.page.expose_function("py_element_picked", self._on_element_picked)
-            self._picker_exposed = True
-
         self.page.add_init_script(self._picker_script)
         self.page.evaluate(self._picker_script)
         for frame in self.page.frames:
@@ -264,8 +272,32 @@ class BrowserManager:
     def wait_for_pick(self, timeout=300):
         start = time.time()
         while self.is_picking and time.time() - start < timeout:
+            if not self.is_available():
+                self.is_picking = False
+                break
+            result = self._read_pick_result()
+            if result:
+                with self._lock:
+                    self.pick_result = result
+                    self.is_picking = False
+                break
             time.sleep(0.2)
         return self.pick_result
+
+    def _read_pick_result(self):
+        targets = [self.page] + [frame for frame in self.page.frames if frame != self.page.main_frame]
+        for target in targets:
+            try:
+                result = target.evaluate("window.__rpaPickedElement || null")
+                if result:
+                    try:
+                        target.evaluate("window.__rpaPickedElement = null")
+                    except Exception:
+                        pass
+                    return result
+            except Exception:
+                continue
+        return None
 
     def locator(self, locator_type, locator_value):
         if not self.page:
@@ -324,9 +356,3 @@ class BrowserManager:
 
     def screenshot(self, path):
         self.page.screenshot(path=path, full_page=True)
-
-    def _on_element_picked(self, payload):
-        with self._lock:
-            self.pick_result = payload
-            self.is_picking = False
-        time.sleep(0.05)

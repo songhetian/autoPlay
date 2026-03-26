@@ -257,6 +257,7 @@ class RPAMainWindow(QMainWindow):
         self.order_index_map = {}
         self.browser_manager = None
         self.capture_thread = None
+        self.capture_context = None
         self.capture_default_url = "https://example.com"
         self.schemes = self.load_json(self.scheme_store_path, [])
         self.current_scheme_name = ""
@@ -271,6 +272,7 @@ class RPAMainWindow(QMainWindow):
 
         self.setWindowTitle("发票自动上传工作台")
         self.resize(1480, 920)
+        self.setMinimumSize(1180, 760)
         self.init_ui()
         self.refresh_element_library()
         self.refresh_image_library()
@@ -512,6 +514,7 @@ class RPAMainWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview_group)
         self.preview_box = QTextEdit()
         self.preview_box.setReadOnly(True)
+        self.preview_box.setMinimumHeight(120)
         preview_layout.addWidget(self.preview_box)
         right_layout.addWidget(preview_group, 1)
 
@@ -538,6 +541,7 @@ class RPAMainWindow(QMainWindow):
         self.order_table.setHorizontalHeaderLabels(["订单号", "状态", "详情"])
         self.order_table.horizontalHeader().setStretchLastSection(True)
         self.order_table.verticalHeader().setVisible(False)
+        self.order_table.setMinimumHeight(180)
         run_layout.addWidget(self.order_table)
         run_btn_row = QHBoxLayout()
         self.parse_only_btn = QPushButton("仅解析并导出 Excel")
@@ -566,7 +570,7 @@ class RPAMainWindow(QMainWindow):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setStyleSheet("background:#111827;color:#d1d5db;font-family:Consolas;")
-        self.log_view.setMinimumHeight(320)
+        self.log_view.setMinimumHeight(180)
         log_layout.addWidget(self.log_view)
         right_layout.addWidget(log_group, 4)
 
@@ -1650,13 +1654,20 @@ class RPAMainWindow(QMainWindow):
         return default_name, default_role, role_options
 
     def capture_element_with_defaults(self, default_name="", default_role="其他"):
-        default_page_url = self.capture_default_url
+        reuse_existing_browser = bool(self.browser_manager and self.browser_manager.is_available())
+        default_page_url = ""
+        if reuse_existing_browser:
+            default_page_url = (self.browser_manager.current_url() or "").strip()
+        if not default_page_url:
+            default_page_url = self.capture_default_url
         workflow_url = (self.get_browser_start_url() or "").strip()
-        if workflow_url and (not default_page_url or default_page_url == "https://example.com"):
+        if not default_page_url and workflow_url:
+            default_page_url = workflow_url
+        if default_page_url == "https://example.com" and workflow_url:
             default_page_url = workflow_url
 
         resolved_page_url = default_page_url.strip()
-        if not resolved_page_url or resolved_page_url == "https://example.com":
+        if not reuse_existing_browser and (not resolved_page_url or resolved_page_url == "https://example.com"):
             page_url, ok = QInputDialog.getText(
                 self,
                 "打开采集页面",
@@ -1696,6 +1707,7 @@ class RPAMainWindow(QMainWindow):
             "role": role,
             "url": resolved_page_url,
             "scheme_name": self.current_scheme_name,
+            "reuse_browser": reuse_existing_browser,
         }
         self.capture_thread = threading.Thread(
             target=self._run_capture_session,
@@ -1805,31 +1817,41 @@ class RPAMainWindow(QMainWindow):
                 pass
 
     def _run_capture_session(self, capture_context):
-        manager = BrowserManager()
-        self.browser_manager = manager
+        manager = self.browser_manager if self.browser_manager and self.browser_manager.is_available() else None
+        started_new_browser = False
+        if not manager:
+            manager = BrowserManager()
+            self.browser_manager = manager
+            started_new_browser = True
         try:
-            self.browser_status_signal.emit("正在打开采集浏览器，请稍等...")
-            manager.start(
-                capture_context["url"],
-                user_data_dir=self.get_scheme_profile_dir(capture_context["scheme_name"]),
-            )
+            if started_new_browser:
+                self.browser_status_signal.emit("正在打开采集浏览器，请稍等...")
+                manager.start(
+                    capture_context["url"],
+                    user_data_dir=self.get_scheme_profile_dir(capture_context["scheme_name"]),
+                )
+            else:
+                self.browser_status_signal.emit("已复用当前采集浏览器，无需重新打开页面。")
             manager.enable_picker()
-            self.browser_status_signal.emit("浏览器已进入采集模式：普通点击采集元素，按住 Shift 再点击可正常打开链接或切换页面；如果页面在 iframe 里，现在也会一起采集。")
+            self.browser_status_signal.emit("浏览器已进入采集模式：普通点击采集元素，按住 Shift 再点击可正常打开链接或切换页面；采完后浏览器会保持打开，方便继续采下一个元素。")
             result = manager.wait_for_pick(timeout=300)
             if not result:
                 self.browser_status_signal.emit("元素采集超时或未成功。")
                 return
             payload = dict(capture_context)
+            payload["url"] = manager.current_url() or capture_context["url"]
             payload.update(result)
             self.element_picked_signal.emit(payload)
         except Exception as exc:
             self.browser_status_signal.emit(f"元素采集失败：{exc}")
         finally:
-            try:
-                manager.stop()
-            except Exception:
-                pass
-            self.browser_manager = None
+            self.capture_thread = None
+            if not manager.is_available():
+                try:
+                    manager.stop()
+                except Exception:
+                    pass
+                self.browser_manager = None
 
     def handle_browser_status(self, message):
         self.log(message, "#60a5fa")
